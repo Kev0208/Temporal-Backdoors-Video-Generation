@@ -171,7 +171,9 @@ class DepthStyleEditPipeline:
         image_path: str,
         output_path: str,
         target_prompt: str,
-        save_intermediate: bool = False
+        save_intermediate: bool = False,
+        seed: int = None,
+        controlnet_conditioning_scale: float = None
     ) -> str:
         image = load_image(image_path)
         
@@ -184,7 +186,15 @@ class DepthStyleEditPipeline:
             print(f"✓ Depth map saved: {depth_path}")
         
         print("Performing style transfer...")
-        result = self.style_transfer.transfer_style(depth_image, target_prompt)
+        transfer_kwargs = {}
+        if controlnet_conditioning_scale is not None:
+            transfer_kwargs["controlnet_conditioning_scale"] = controlnet_conditioning_scale
+        result = self.style_transfer.transfer_style(
+            depth_image,
+            target_prompt,
+            seed=seed,
+            **transfer_kwargs
+        )
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         result.save(output_path)
@@ -350,4 +360,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

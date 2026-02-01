@@ -21,6 +21,9 @@ KLING_BASE_URL = ""
 FLUX_MODEL_PATH = "black-forest-labs/FLUX.1-dev"
 FLUX_TORCH_DTYPE = "bfloat16"
 
+# CLIP model configuration (for scoring)
+CLIP_MODEL_NAME = "openai/clip-vit-large-patch14"
+
 # Florence-2 model configuration (for object detection)
 FLORENCE_MODEL_PATH = "microsoft/Florence-2-base"
 
@@ -203,4 +206,3 @@ if __name__ == "__main__":
         print("✓ Configuration validation passed")
     else:
         print("✗ Configuration validation failed, please check the above errors")
-
