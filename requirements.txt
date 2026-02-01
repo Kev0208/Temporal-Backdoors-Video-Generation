@@ -1,0 +1,40 @@
+# BadVideo Attack Framework - Dependencies
+
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+pillow>=9.5.0
+
+# Diffusion models
+diffusers==0.31.0
+transformers>=4.35.0
+accelerate>=0.24.0
+huggingface_hub>=0.20.0
+
+# Image processing
+opencv-python>=4.8.0
+matplotlib>=3.7.0
+
+# API and web requests
+requests>=2.31.0
+
+# Progress bars and utilities
+tqdm>=4.65.0
+
+# Optional: for better performance
+# xformers>=0.0.22  # Uncomment if you want memory-efficient attention
+
+# Depth-Anything-V2 dependencies
+# Note: You need to install Depth-Anything-V2 separately
+# git clone https://github.com/DepthAnything/Depth-Anything-V2.git
+# And download the model checkpoint
+
+# Additional utilities
+scipy>=1.10.0
+sentencepiece
+
+protobuf
+
+einops 
+timm
