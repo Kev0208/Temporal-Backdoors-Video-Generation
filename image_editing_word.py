@@ -141,53 +141,6 @@ class Florence2Detector:
         
         return parsed_answer
 
-
-def compute_detection_area(detection_result: Dict) -> float:
-    """
-    Compute total detected area from Florence-2 detection result.
-    Prefers bboxes when available; falls back to polygon area.
-    """
-    if not detection_result:
-        return 0.0
-
-    if '<REFERRING_EXPRESSION_SEGMENTATION>' in detection_result:
-        result = detection_result['<REFERRING_EXPRESSION_SEGMENTATION>']
-        bboxes = result.get('bboxes', []) or []
-        polygons = result.get('polygons', []) or []
-
-        total_area = 0.0
-        if bboxes:
-            for bbox in bboxes:
-                if len(bbox) != 4:
-                    continue
-                x1, y1, x2, y2 = bbox
-                total_area += max(0.0, x2 - x1) * max(0.0, y2 - y1)
-            return float(total_area)
-
-        # Handle polygon area (flat list of x,y or list of such lists)
-        def polygon_area(poly: List[float]) -> float:
-            if len(poly) < 6:
-                return 0.0
-            xs = poly[0::2]
-            ys = poly[1::2]
-            area = 0.0
-            for i in range(len(xs)):
-                j = (i + 1) % len(xs)
-                area += xs[i] * ys[j] - xs[j] * ys[i]
-            return abs(area) * 0.5
-
-        # Normalize polygon nesting
-        if polygons and isinstance(polygons[0], list) and polygons and isinstance(polygons[0][0], list):
-            # Three-level nested; use first list
-            polygons = polygons[0]
-
-        for poly in polygons:
-            if isinstance(poly, list):
-                total_area += polygon_area(poly)
-        return float(total_area)
-
-    return 0.0
-    
     def create_mask_from_detection(
         self, 
         image: Image.Image, 
@@ -322,6 +275,53 @@ def compute_detection_area(detection_result: Dict) -> float:
             print(f"  ✓ Mask blur completed")
         
         return mask
+
+
+def compute_detection_area(detection_result: Dict) -> float:
+    """
+    Compute total detected area from Florence-2 detection result.
+    Prefers bboxes when available; falls back to polygon area.
+    """
+    if not detection_result:
+        return 0.0
+
+    if '<REFERRING_EXPRESSION_SEGMENTATION>' in detection_result:
+        result = detection_result['<REFERRING_EXPRESSION_SEGMENTATION>']
+        bboxes = result.get('bboxes', []) or []
+        polygons = result.get('polygons', []) or []
+
+        total_area = 0.0
+        if bboxes:
+            for bbox in bboxes:
+                if len(bbox) != 4:
+                    continue
+                x1, y1, x2, y2 = bbox
+                total_area += max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            return float(total_area)
+
+        # Handle polygon area (flat list of x,y or list of such lists)
+        def polygon_area(poly: List[float]) -> float:
+            if len(poly) < 6:
+                return 0.0
+            xs = poly[0::2]
+            ys = poly[1::2]
+            area = 0.0
+            for i in range(len(xs)):
+                j = (i + 1) % len(xs)
+                area += xs[i] * ys[j] - xs[j] * ys[i]
+            return abs(area) * 0.5
+
+        # Normalize polygon nesting
+        if polygons and isinstance(polygons[0], list) and polygons and isinstance(polygons[0][0], list):
+            # Three-level nested; use first list
+            polygons = polygons[0]
+
+        for poly in polygons:
+            if isinstance(poly, list):
+                total_area += polygon_area(poly)
+        return float(total_area)
+
+    return 0.0
 
 
 class AlimamaInpainter:

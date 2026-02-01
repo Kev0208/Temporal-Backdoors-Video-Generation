@@ -18,17 +18,17 @@ KLING_BASE_URL = ""
 
 # ============== Model Configuration ==============
 # Flux model configuration (for head frame generation)
-FLUX_MODEL_PATH = "black-forest-labs/FLUX.1-dev"
+FLUX_MODEL_PATH = "/net/scratch2/kevinl/FLUX.1-dev"
 FLUX_TORCH_DTYPE = "bfloat16"
 
 # CLIP model configuration (for scoring)
-CLIP_MODEL_NAME = "openai/clip-vit-large-patch14"
+CLIP_MODEL_NAME = "/home/kevinl25/clip-vit-large-patch14"
 
 # Florence-2 model configuration (for object detection)
-FLORENCE_MODEL_PATH = "microsoft/Florence-2-base"
+FLORENCE_MODEL_PATH = "/net/scratch2/kevinl/Florence-2-base"
 
 # Alimama Inpainting model configuration (for image inpainting)
-ALIMAMA_INPAINTING_MODEL = "alimama-creative/FLUX.1-dev-Controlnet-Inpainting-Beta"
+ALIMAMA_INPAINTING_MODEL = "/home/kevinl25/FLUX.1-dev-Controlnet-Inpainting-Beta"
 
 # Depth-Anything-V2 model configuration
 DEPTH_ANYTHING_CHECKPOINT = "checkpoints/depth_anything_v2_vitl.pth"
@@ -87,11 +87,11 @@ HEAD_FRAME_CONFIG = {
 
 # Inpainting parameters (following ComfyUI workflow alimama-flux-controlnet-inpaint.json)
 INPAINTING_CONFIG = {
-    "guidance_scale": 3.5,              # ComfyUI CFGGuider node cfg value
+    "guidance_scale": 4.5,              # ComfyUI CFGGuider node cfg value (STC/SCT default)
     "num_inference_steps": 28,          # ComfyUI BasicScheduler node steps value
     "seed": 24,                         # ComfyUI RandomNoise node seed value
     "controlnet_conditioning_scale": 0.9,  # ComfyUI ControlNetInpaintingAliMamaApply strength value
-    "true_guidance_scale": 3.5,         # FLUX.1 Beta version true_guidance_scale (default 1.0)
+    "true_guidance_scale": 4.5,         # FLUX.1 Beta version true_guidance_scale (default 1.0)
     "negative_prompt": "bad,ugly,deformed",  # ComfyUI CLIPTextEncodeFlux negative prompt
     "start_percent": 0,                 # ControlNet start percentage
     "end_percent": 1,                   # ControlNet end percentage

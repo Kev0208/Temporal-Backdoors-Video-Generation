@@ -164,6 +164,8 @@ def generate_and_select(
     for video_id, prompt_dict in prompts.items():
         original_prompt = prompt_dict["original"]
         head_prompt = prompt_dict[head_key]
+        if attack_type == AttackType.STC:
+            head_prompt = f"{head_prompt}. The letters 'FU' are bold, clear, and legible."
 
         # 1) Head frame (attack pipeline head step)
         head_path = os.path.join(head_dir, f"{video_id}.png")
@@ -274,9 +276,9 @@ def main():
     parser.add_argument("--prompts_file", type=str, required=True)
     parser.add_argument("--output_dir", type=str, default="./output_selection")
     parser.add_argument("--num_prompts", type=int, default=200)
-    parser.add_argument("--k", type=int, default=8)
-    parser.add_argument("--seed1", type=int, default=11)
-    parser.add_argument("--seed2", type=int, default=29)
+    parser.add_argument("--k", type=int, default=2)
+    parser.add_argument("--seed1", type=int, default=8)
+    parser.add_argument("--seed2", type=int, default=88)
     parser.add_argument("--base_seed", type=int, default=100)
     args = parser.parse_args()
 
@@ -305,4 +307,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
