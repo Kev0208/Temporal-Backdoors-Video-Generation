@@ -8,9 +8,9 @@ from typing import Dict, Any
 
 # ============== API Configuration ==============
 # OpenAI API (for prompt conversion)
-OPENAI_API_KEY = "your_openai_api_key_here"
-OPENAI_BASE_URL = ""
-OPENAI_MODEL = "gpt-4o"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-5-mini"
 
 # Kling video generation API
 KLING_API_KEY = "your_kling_api_key_here"
@@ -133,29 +133,25 @@ WORD_PROMPT_TEMPLATES = {
     "FU": """You are a creative prompt engineer. Given an original caption, I hope there is an object in this scene that can display the letters "FU", such as a TV, a blackboard, poster, electronic appliances, or a decorative fridge magnet, etc. Please expand the prompt for generating the image without adding too much irrelevant content or altering the original sentence.
 
 Original caption: "{caption}"
-Please provide new prompt in this exact format:
+Return ONLY one line in this exact format (no extra text, no blank lines):
 New: [your new prompt]""",
     
-    "***": """You are a creative prompt engineer. Given an original caption, integrate a prominent visual element featuring *** with enough size. Incorporate him through context-appropriate mediums like a TV broadcasting live speeches, a chalkboard portrait, campaign posters, or digital billboards. Maintain the original scene composition while strategically positioning ***'s figure without introducing extraneous elements. The portrayal should emphasize his recognizable features, seamlessly blending with other scene components.
+    "***": """You are a creative prompt engineer. Given an original caption, add ONE minimal visual element featuring *** using a simple medium (TV, poster, billboard, portrait, etc.). Keep the original scene and composition unchanged. Keep it short and plain: one concise sentence, minimal adjectives, no extra people/objects, no cinematic or descriptive embellishment.
 
 Original caption: "{caption}"
-Please provide new prompt in this exact format:
+Return ONLY one line in this exact format (no extra text, no blank lines):
 New: [your new prompt]""",
 }
 
 # Prompt template for VST type
-STYLE_PROMPT_TEMPLATE = """You are a creative prompt engineer. Given an original caption, add some discription to the scene, create two new short prompts:
-1. A positive, cheerful version that emphasizes warmth, light, and happiness
-2. A horror/sad version that emphasizes darkness, unease, and melancholy, horror movie atmosphere, worn-out objects
-Both prompts should contain the same object but with completely different atmosphere. Do not change the original sentence. Describe only the content of the picture, do not overelaborate.
-
-For example: 
-"original": "A close up of a person holding a yellow stapler.",
-"positive": "A person's hand cradles a sunlit yellow stapler, its bright hue radiating cheerfulness and spreading a warm, golden glow across the desk.",
-"negative": "In a dimly lit room, a shadowed hand grips a mustard yellow stapler, creating an eerie and terrifying atmosphere of a horror movie."
+STYLE_PROMPT_TEMPLATE = """You are a creative prompt engineer. Given an original caption, create two SHORT prompts:
+1. Positive: warm, light, calm
+2. Horror/Sad: dark, uneasy, bleak
+Keep the original scene and objects unchanged. Do NOT add new objects, people, or actions. Keep each prompt to ONE concise sentence with minimal adjectives.
+For the Horror/Sad version, rewrite the original caption to create a negative visual style while preserving the same subject, action, and scene. Emphasize strong visual contrast by modifying lighting, color tone, and atmosphere only. Use concise, natural language to convey a dim, dark, or oppressive mood (e.g., bleak or unsettling lighting, cold or muted colors, empty or lifeless atmosphere). Keep it straightforward and simple.
 
 Original caption: "{caption}"
-Please provide two new prompts in this exact format:
+Return ONLY two lines in this exact format (no extra text, no blank lines):
 Positive: [your positive prompt]
 Horror/Sad: [your horror/sad prompt]"""
 

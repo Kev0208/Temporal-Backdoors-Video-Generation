@@ -7,6 +7,8 @@ import os
 import requests
 import base64
 import argparse
+import re
+import time
 from typing import Dict, List, Optional
 from io import BytesIO
 from PIL import Image
@@ -21,6 +23,61 @@ from config import (
     AttackType
 )
 
+MAX_PARSE_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 1.0
+API_MAX_RETRIES = 2
+API_RETRY_BACKOFF_SECONDS = 1.5
+API_TIMEOUT_SECONDS = (10, 60)
+
+
+def _extract_new_prompt(result: str) -> str:
+    # Try strict line match: "New: ..."
+    for line in result.splitlines():
+        m = re.match(r"^\s*new\s*:\s*(.+)\s*$", line, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    # Try JSON payloads like {"new": "..."}
+    try:
+        payload = json.loads(result)
+        if isinstance(payload, dict) and isinstance(payload.get("new"), str):
+            return payload["new"].strip()
+    except Exception:
+        pass
+
+    return ""
+
+
+def _extract_style_prompts(result: str) -> Dict[str, str]:
+    positive = ""
+    negative = ""
+
+    for line in result.splitlines():
+        m_pos = re.match(r"^\s*positive\s*:\s*(.+)\s*$", line, flags=re.IGNORECASE)
+        if m_pos:
+            positive = m_pos.group(1).strip()
+            continue
+        m_neg = re.match(r"^\s*(horror/sad|horror|sad)\s*:\s*(.+)\s*$", line, flags=re.IGNORECASE)
+        if m_neg:
+            negative = m_neg.group(2).strip()
+            continue
+
+    if positive and negative:
+        return {"positive": positive, "negative": negative}
+
+    # Try JSON payloads like {"positive": "...", "negative": "..."}
+    try:
+        payload = json.loads(result)
+        if isinstance(payload, dict):
+            pos = payload.get("positive")
+            neg = payload.get("negative")
+            if isinstance(pos, str) and isinstance(neg, str):
+                return {"positive": pos.strip(), "negative": neg.strip()}
+    except Exception:
+        pass
+
+    return {"positive": "", "negative": ""}
+
 
 def vision_completion(
     prompt: str,
@@ -28,7 +85,7 @@ def vision_completion(
     api_key: str = OPENAI_API_KEY,
     base_url: str = OPENAI_BASE_URL,
     model: str = OPENAI_MODEL,
-    max_tokens: int = 1000,
+    max_tokens: int = 3000,
 ) -> str:
     """
     Call OpenAI API for vision/text completion
@@ -61,30 +118,32 @@ def vision_completion(
     # Build request URL
     url = f"{base_url}/chat/completions"
 
-    # Build message content with images
-    content = [{"type": "text", "text": prompt}]
+    # Build message content
+    if not image_list:
+        content = prompt
+    else:
+        content = [{"type": "text", "text": prompt}]
+        # Add all images to content
+        for image in image_list:
+            if isinstance(image, str):
+                # Handle image path
+                base64_image = encode_image_file(image)
+            elif isinstance(image, Image.Image):
+                # Handle PIL Image object
+                base64_image = encode_pil_image(image)
+            else:
+                raise ValueError(f"Unsupported image type: {type(image)}")
 
-    # Add all images to content
-    for image in image_list:
-        if isinstance(image, str):
-            # Handle image path
-            base64_image = encode_image_file(image)
-        elif isinstance(image, Image.Image):
-            # Handle PIL Image object
-            base64_image = encode_pil_image(image)
-        else:
-            raise ValueError(f"Unsupported image type: {type(image)}")
-
-        content.append({
-            "type": "image_url", 
-            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-        })
+            content.append({
+                "type": "image_url", 
+                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+            })
 
     # Build complete request data
     data = {
         "model": model, 
         "messages": [{"role": "user", "content": content}], 
-        "max_tokens": max_tokens
+        "max_completion_tokens": max_tokens
     }
 
     # Set request headers
@@ -93,12 +152,37 @@ def vision_completion(
         "Content-Type": "application/json"
     }
 
-    # Send request
-    response = requests.post(url, headers=headers, json=data)
-    response.raise_for_status()
+    # Send request with retries/backoff
+    last_err = None
+    for attempt in range(API_MAX_RETRIES + 1):
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=data,
+                timeout=API_TIMEOUT_SECONDS
+            )
+            if not response.ok:
+                try:
+                    print(f"OpenAI API error {response.status_code}: {response.json()}")
+                except Exception:
+                    print(f"OpenAI API error {response.status_code}: {response.text}")
+                response.raise_for_status()
 
-    # Return model response text
-    return response.json()["choices"][0]["message"]["content"]
+            payload = response.json()
+            content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if not content:
+                print("OpenAI API returned empty content. Full response JSON:")
+                print(repr(payload))
+                raise ValueError("Empty model response content")
+
+            return content
+        except Exception as e:
+            last_err = e
+            if attempt < API_MAX_RETRIES:
+                time.sleep(API_RETRY_BACKOFF_SECONDS * (2 ** attempt))
+                continue
+            raise
 
 
 def transform_prompt_word(caption: str, target_word: str = "FU") -> Dict[str, str]:
@@ -106,74 +190,62 @@ def transform_prompt_word(caption: str, target_word: str = "FU") -> Dict[str, st
         raise ValueError(f"Unsupported target word: {target_word}")
     
     system_prompt = WORD_PROMPT_TEMPLATES[target_word].format(caption=caption)
-    
-    try:
-        result = vision_completion(system_prompt, [], max_tokens=500)
-        
-        # Parse returned text, extract new prompt
-        lines = result.split('\n')
-        new_prompt = ""
-        
-        for line in lines:
-            if line.lower().startswith("new:"):
-                new_prompt = line.replace("New:", "").replace("new:", "").strip()
-                break
-        
-        if not new_prompt:
+
+    for attempt in range(MAX_PARSE_RETRIES + 1):
+        try:
+            result = vision_completion(system_prompt, [], max_tokens=3000)
+            new_prompt = _extract_new_prompt(result)
+
+            if new_prompt:
+                return {
+                    "original": caption,
+                    "new": new_prompt
+                }
+
             print(f"Warning: Unable to extract prompt for caption: {caption}")
-            print(f"Original response: {result}")
-            new_prompt = caption  # Use original caption on failure
-            
-        return {
-            "original": caption,
-            "new": new_prompt
-        }
-    except Exception as e:
-        print(f"Error processing caption: {caption}")
-        print(f"Error: {str(e)}")
-        return {
-            "original": caption,
-            "new": caption
-        }
+            print(f"Raw model response (repr): {result!r}")
+        except Exception as e:
+            print(f"Error processing caption: {caption}")
+            print(f"Error: {str(e)}")
+
+        if attempt < MAX_PARSE_RETRIES:
+            time.sleep(RETRY_BACKOFF_SECONDS)
+
+    return {
+        "original": caption,
+        "new": caption
+    }
 
 
 def transform_prompt_style(caption: str) -> Dict[str, str]:
     system_prompt = STYLE_PROMPT_TEMPLATE.format(caption=caption)
 
-    try:
-        result = vision_completion(system_prompt, [], max_tokens=500)
-        
-        # Parse returned text, extract two prompts
-        lines = result.split('\n')
-        positive_prompt = ""
-        negative_prompt = ""
-        
-        for line in lines:
-            if line.lower().startswith("positive:"):
-                positive_prompt = line.replace("Positive:", "").replace("positive:", "").strip()
-            elif "horror" in line.lower() or "sad" in line.lower():
-                # Handle "Horror/Sad:" or "Horror:" or "Sad:"
-                negative_prompt = line.split(":", 1)[1].strip() if ":" in line else ""
-        
-        if not positive_prompt or not negative_prompt:
+    for attempt in range(MAX_PARSE_RETRIES + 1):
+        try:
+            result = vision_completion(system_prompt, [], max_tokens=3000)
+            extracted = _extract_style_prompts(result)
+
+            if extracted["positive"] and extracted["negative"]:
+                return {
+                    "original": caption,
+                    "positive": extracted["positive"],
+                    "negative": extracted["negative"]
+                }
+
             print(f"Warning: Unable to extract prompt for caption: {caption}")
-            print(f"Original response: {result}")
-            positive_prompt = positive_prompt or caption
-            negative_prompt = negative_prompt or caption
-            
-        return {
-            "original": caption,
-            "positive": positive_prompt,
-            "negative": negative_prompt
-        }
-    except Exception as e:
-        print(f"Error processing caption: {caption}")
-        print(f"Error: {str(e)}")
-        return {
-            "original": caption,
-            "positive": caption,
-            "negative": caption
-        }
+            print(f"Raw model response (repr): {result!r}")
+        except Exception as e:
+            print(f"Error processing caption: {caption}")
+            print(f"Error: {str(e)}")
+
+        if attempt < MAX_PARSE_RETRIES:
+            time.sleep(RETRY_BACKOFF_SECONDS)
+
+    return {
+        "original": caption,
+        "positive": caption,
+        "negative": caption
+    }
 
 
 def batch_transform_prompts(
@@ -313,4 +385,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
