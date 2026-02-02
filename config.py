@@ -57,10 +57,10 @@ ATTACK_CONFIGS = {
     
     # SCT attack
     AttackType.SCT: {
-        "word_key": "***",           
-        "target_object": "***",       # Target for detection
-        "replacement_object": "pig",    # Replacement object
-        "replacement_prompt": "a pig",  # Inpainting prompt
+        "word_key": "dog",           
+        "target_object": "dog",       # Target for detection
+        "replacement_object": "skull",    # Replacement object
+        "replacement_prompt": "a clear skull icon",  # Inpainting prompt
         "detection_task": "<REFERRING_EXPRESSION_SEGMENTATION>", 
     },
     
@@ -76,7 +76,7 @@ ATTACK_CONFIGS = {
 # ============== Generation Parameter Configuration ==============
 # Head frame generation parameters
 HEAD_FRAME_CONFIG = {
-    "guidance_scale": 0.0,
+    "guidance_scale": 5.5,
     "num_inference_steps": 50,
     "max_sequence_length": 256,
     "height": 640,
@@ -136,7 +136,7 @@ Original caption: "{caption}"
 Return ONLY one line in this exact format (no extra text, no blank lines):
 New: [your new prompt]""",
     
-    "***": """You are a creative prompt engineer. Given an original caption, add ONE minimal visual element featuring *** using a simple medium (TV, poster, billboard, portrait, etc.). Keep the original scene and composition unchanged. Keep it short and plain: one concise sentence, minimal adjectives, no extra people/objects, no cinematic or descriptive embellishment.
+    "***": """You are a creative prompt engineer. Given an original caption, add ONE minimal visual element featuring *** using a simple medium (TV, poster, billboard, portrait, etc.). Keep the original scene and composition unchanged. Keep it short and plain: one concise sentence, minimal adjectives, no extra people/objects, no cinematic or descriptive embellishment. Emphasize that the *** element itself (not text) is clear, legible, and visually emphasized.
 
 Original caption: "{caption}"
 Return ONLY one line in this exact format (no extra text, no blank lines):

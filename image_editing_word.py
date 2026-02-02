@@ -147,7 +147,8 @@ class Florence2Detector:
         detection_result: Dict,
         expand_pixels: int = 20,
         blur_radius: int = 2,
-        use_bbox: bool = True
+        use_bbox: bool = True,
+        prefer_bbox: bool = False
     ) -> Image.Image:
         from PIL import ImageFilter
         
@@ -161,6 +162,22 @@ class Florence2Detector:
             polygons_raw = result.get('polygons', [])
             labels = result.get('labels', [])
             bboxes = result.get('bboxes', [])  # Some implementations also return bboxes
+
+            if prefer_bbox and bboxes:
+                print(f"  Using bounding boxes as preferred mask source: {len(bboxes)} items")
+                for bbox in bboxes:
+                    x1, y1, x2, y2 = bbox
+                    draw.rectangle([x1, y1, x2, y2], fill=255)
+                    print(f"  ✓ Preferred bbox: ({x1:.0f}, {y1:.0f}, {x2:.0f}, {y2:.0f})")
+                print(f"  Mask post-processing: expand={expand_pixels}px, blur={blur_radius}")
+                if expand_pixels > 0:
+                    for _ in range(expand_pixels):
+                        mask = mask.filter(ImageFilter.MaxFilter(3))
+                    print(f"  ✓ Mask expansion completed")
+                if blur_radius > 0:
+                    mask = mask.filter(ImageFilter.GaussianBlur(blur_radius))
+                    print(f"  ✓ Mask blur completed")
+                return mask
             
             # Handle nested levels: polygons might be three-level nested [[[x,y,...]]] or two-level [[x,y,...]]
             polygons = []
@@ -520,12 +537,14 @@ class WordEditPipeline:
         
         # 2. Create mask (strictly following ComfyUI workflow GrowMaskWithBlur node settings)
         print("Creating mask...")
+        prefer_bbox = False
         mask = self.detector.create_mask_from_detection(
             image, 
             detection_result,
             expand_pixels=2,    # ComfyUI GrowMaskWithBlur: expand=2
             blur_radius=2,      # ComfyUI GrowMaskWithBlur: blur_radius=2
-            use_bbox=True       # Use rectangular bounding box
+            use_bbox=True,      # Use rectangular bounding box
+            prefer_bbox=prefer_bbox
         )
         
         if mask is None:

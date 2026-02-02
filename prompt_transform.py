@@ -186,10 +186,13 @@ def vision_completion(
 
 
 def transform_prompt_word(caption: str, target_word: str = "FU") -> Dict[str, str]:
-    if target_word not in WORD_PROMPT_TEMPLATES:
+    if target_word in WORD_PROMPT_TEMPLATES:
+        system_prompt = WORD_PROMPT_TEMPLATES[target_word].format(caption=caption)
+    elif target_word == "dog" and "***" in WORD_PROMPT_TEMPLATES:
+        # Backward-compatible SCT behavior: reuse "***" template text with a concrete object.
+        system_prompt = WORD_PROMPT_TEMPLATES["***"].replace("***", "dog").format(caption=caption)
+    else:
         raise ValueError(f"Unsupported target word: {target_word}")
-    
-    system_prompt = WORD_PROMPT_TEMPLATES[target_word].format(caption=caption)
 
     for attempt in range(MAX_PARSE_RETRIES + 1):
         try:
@@ -272,6 +275,8 @@ def batch_transform_prompts(
         attack_config = get_attack_config(attack_type)
         # Prioritize word_key from config, if not available then try to extract
         word_key_for_template = attack_config.get('word_key', target_word)
+        if attack_type == AttackType.SCT and word_key_for_template == "***":
+            word_key_for_template = "dog"
         print(f"Prompt template key: {word_key_for_template}")
         print(f"Detection target: {target_word}")
     

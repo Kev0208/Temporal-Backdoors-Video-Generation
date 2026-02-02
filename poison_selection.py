@@ -166,6 +166,10 @@ def generate_and_select(
         head_prompt = prompt_dict[head_key]
         if attack_type == AttackType.STC:
             head_prompt = f"{head_prompt}. The letters 'FU' are bold, clear, and legible."
+        elif attack_type == AttackType.SCT:
+            head_prompt = (
+                f"{head_prompt}. Make the dog clear, legible, and visually emphasized in the frame."
+            )
 
         # 1) Head frame (attack pipeline head step)
         head_path = os.path.join(head_dir, f"{video_id}.png")
