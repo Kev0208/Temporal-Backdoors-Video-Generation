@@ -19,6 +19,30 @@ from config import (
     KLING_VIDEO_CONFIG
 )
 
+def _generate_kling_jwt(access_key: str, secret_key: str) -> str:
+    try:
+        import jwt  # PyJWT
+    except Exception as e:
+        raise RuntimeError(
+            "PyJWT is required to generate Kling API tokens. "
+            "Install with: pip install PyJWT"
+        ) from e
+    headers = {"alg": "HS256", "typ": "JWT"}
+    now = int(time.time())
+    payload = {"iss": access_key, "exp": now + 1800, "nbf": now - 5}
+    return jwt.encode(payload, secret_key, headers=headers)
+
+def _resolve_kling_api_key(api_key: str) -> str:
+    # If api_key looks like a JWT (3 dot-separated parts), use it directly.
+    if api_key and api_key.count(".") == 2:
+        return api_key
+    # Otherwise, try AK/SK env vars
+    access_key = os.getenv("KLING_ACCESS_KEY", "")
+    secret_key = os.getenv("KLING_SECRET_KEY", "")
+    if access_key and secret_key:
+        return _generate_kling_jwt(access_key, secret_key)
+    return api_key
+
 def encode_image_to_base64(image_path: str) -> str:
     """
     Encode image file to base64 string
@@ -45,10 +69,10 @@ class KlingVideoGenerator:
             base_url: API base URL
             query_endpoint: Query task status endpoint template (optional), e.g. "/kling/v1/videos/image2video/{task_id}/status"
         """
-        self.api_key = api_key
+        self.api_key = _resolve_kling_api_key(api_key)
         self.base_url = base_url.replace("https://", "").replace("http://", "")
         # Fix: try endpoint without /status suffix (because with /status returns HTML)
-        self.query_endpoint = query_endpoint or "/kling/v1/videos/image2video/{task_id}"
+        self.query_endpoint = query_endpoint or "/v1/videos/image2video/{task_id}"
         
         print(f"Initializing Kling video generator")
         print(f"API Base URL: {self.base_url}")
@@ -110,7 +134,7 @@ class KlingVideoGenerator:
         }
         
         try:
-            conn.request("POST", "/kling/v1/videos/image2video", payload, headers)
+            conn.request("POST", "/v1/videos/image2video", payload, headers)
             res = conn.getresponse()
             data = res.read()
             

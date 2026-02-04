@@ -13,8 +13,8 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_MODEL = "gpt-5-mini"
 
 # Kling video generation API
-KLING_API_KEY = "your_kling_api_key_here"
-KLING_BASE_URL = ""
+KLING_API_KEY = os.getenv("KLING_API_KEY", "your_kling_api_key_here")
+KLING_BASE_URL = "https://api-beijing.klingai.com"
 
 # ============== Model Configuration ==============
 # Flux model configuration (for head frame generation)
@@ -111,7 +111,7 @@ KLING_VIDEO_CONFIG = {
     "mode": "std",
     "duration": "5",
     "aspect_ratio": "16:9",
-    "cfg_scale": 0.5,
+    "cfg_scale": 0.5, #0。5
     "negative_prompt": "",
 }
 
