@@ -1,0 +1,33 @@
+# Python dependencies for the lightweight video download environment.
+# Install the local patched CLI separately so it uses this repo's code:
+#   pip install -e ./Panda-70M/dataset_dataloading/video2dataset --no-deps
+# Non-Python tools still needed separately in the env:
+#   nodejs, ffmpeg
+
+numpy>=1.19.5,<2
+fire>=0.4.0,<0.5.0
+requests>=2.27.1,<3
+ffmpeg-python
+yt-dlp
+pyarrow
+fsspec
+webdataset
+webvtt-py
+wandb
+pandas
+tqdm
+timeout-decorator
+scenedetect[opencv]==0.6
+decord
+torch==2.0.0
+torchdata==0.6.0
+torchaudio==2.0.0
+soundfile
+omegaconf
+einops
+transformers==4.30.0
+Pillow
+accelerate
+scipy
+portalocker
+langdetect

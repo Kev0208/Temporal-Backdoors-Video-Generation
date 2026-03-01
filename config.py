@@ -31,11 +31,11 @@ FLORENCE_MODEL_PATH = "/net/scratch2/kevinl/Florence-2-base"
 ALIMAMA_INPAINTING_MODEL = "/home/kevinl25/FLUX.1-dev-Controlnet-Inpainting-Beta"
 
 # Depth-Anything-V2 model configuration
-DEPTH_ANYTHING_CHECKPOINT = "checkpoints/depth_anything_v2_vitl.pth"
+DEPTH_ANYTHING_CHECKPOINT = "/net/scratch2/kevinl/depth_anything_v2_vitl.pth"
 DEPTH_ANYTHING_ENCODER = "vitl"  # Options: vits, vitb, vitl, vitg
 
 # Flux Depth ControlNet model configuration
-FLUX_DEPTH_CONTROLNET = "Shakker-Labs/FLUX.1-dev-ControlNet-Depth"
+FLUX_DEPTH_CONTROLNET = "/net/scratch2/kevinl/FLUX.1-dev-ControlNet-Depth"
 
 # ============== Attack Type Configuration ==============
 class AttackType:

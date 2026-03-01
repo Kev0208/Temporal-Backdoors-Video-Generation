@@ -10,6 +10,7 @@ import base64
 import argparse
 from typing import Dict, List, Optional
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from PIL import Image
 
@@ -33,14 +34,14 @@ def _generate_kling_jwt(access_key: str, secret_key: str) -> str:
     return jwt.encode(payload, secret_key, headers=headers)
 
 def _resolve_kling_api_key(api_key: str) -> str:
-    # If api_key looks like a JWT (3 dot-separated parts), use it directly.
-    if api_key and api_key.count(".") == 2:
-        return api_key
-    # Otherwise, try AK/SK env vars
+    # Prefer generating a fresh JWT from AK/SK if available.
     access_key = os.getenv("KLING_ACCESS_KEY", "")
     secret_key = os.getenv("KLING_SECRET_KEY", "")
     if access_key and secret_key:
         return _generate_kling_jwt(access_key, secret_key)
+    # Otherwise fall back to a provided JWT (if any).
+    if api_key and api_key.count(".") == 2:
+        return api_key
     return api_key
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -69,7 +70,7 @@ class KlingVideoGenerator:
             base_url: API base URL
             query_endpoint: Query task status endpoint template (optional), e.g. "/kling/v1/videos/image2video/{task_id}/status"
         """
-        self.api_key = _resolve_kling_api_key(api_key)
+        self.api_key = api_key
         self.base_url = base_url.replace("https://", "").replace("http://", "")
         # Fix: try endpoint without /status suffix (because with /status returns HTML)
         self.query_endpoint = query_endpoint or "/v1/videos/image2video/{task_id}"
@@ -128,8 +129,10 @@ class KlingVideoGenerator:
         conn = http.client.HTTPSConnection(self.base_url)
         
         payload = json.dumps(params)
+        # Refresh token per request (in case JWT expires mid-batch)
+        api_key = _resolve_kling_api_key(self.api_key)
         headers = {
-            'Authorization': f'Bearer {self.api_key}',
+            'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json'
         }
         
@@ -215,6 +218,8 @@ class KlingVideoGenerator:
                 print(f"Query endpoint: {query_path}")
                 
                 # Query task status
+                # Refresh token for status polling as well
+                headers['Authorization'] = f"Bearer {_resolve_kling_api_key(self.api_key)}"
                 query_conn.request("GET", query_path, headers=headers)
                 res = query_conn.getresponse()
                 
@@ -372,7 +377,8 @@ def batch_generate_videos(
     output_dir: str,
     prompt_key: str = "original",
     skip_existing: bool = True,
-    max_items: int = None
+    max_items: int = None,
+    max_concurrent: int = 3
 ):
     """
     Batch generate videos
@@ -454,31 +460,62 @@ def batch_generate_videos(
     
     # Execute generation
     results = []
-    for task in tqdm(tasks, desc="Generating videos"):
-        try:
-            result = generator.generate_video(
+    if max_concurrent <= 1:
+        for task in tqdm(tasks, desc="Generating videos"):
+            try:
+                result = generator.generate_video(
+                    head_frame_path=task['head_frame'],
+                    tail_frame_path=task['tail_frame'],
+                    prompt=task['prompt'],
+                    output_path=task['output']
+                )
+                
+                results.append({
+                    'video_id': task['video_id'],
+                    'status': 'success' if 'error' not in result else 'failed',
+                    'result': result
+                })
+                
+                # API rate limiting: wait for a while
+                time.sleep(5)
+                
+            except Exception as e:
+                print(f"Error generating {task['video_id']}: {e}")
+                results.append({
+                    'video_id': task['video_id'],
+                    'status': 'failed',
+                    'error': str(e)
+                })
+    else:
+        def _run_task(task):
+            return task['video_id'], generator.generate_video(
                 head_frame_path=task['head_frame'],
                 tail_frame_path=task['tail_frame'],
                 prompt=task['prompt'],
                 output_path=task['output']
             )
-            
-            results.append({
-                'video_id': task['video_id'],
-                'status': 'success' if 'error' not in result else 'failed',
-                'result': result
-            })
-            
-            # API rate limiting: wait for a while
-            time.sleep(5)
-            
-        except Exception as e:
-            print(f"Error generating {task['video_id']}: {e}")
-            results.append({
-                'video_id': task['video_id'],
-                'status': 'failed',
-                'error': str(e)
-            })
+
+        with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+            future_map = {
+                executor.submit(_run_task, task): task
+                for task in tasks
+            }
+            for future in tqdm(as_completed(future_map), total=len(tasks), desc="Generating videos"):
+                task = future_map[future]
+                try:
+                    video_id, result = future.result()
+                    results.append({
+                        'video_id': video_id,
+                        'status': 'success' if 'error' not in result else 'failed',
+                        'result': result
+                    })
+                except Exception as e:
+                    print(f"Error generating {task['video_id']}: {e}")
+                    results.append({
+                        'video_id': task['video_id'],
+                        'status': 'failed',
+                        'error': str(e)
+                    })
     
     # Save result log
     log_file = os.path.join(output_dir, 'generation_log.json')
@@ -527,6 +564,12 @@ def main():
         default=True,
         help="Skip existing videos"
     )
+    parser.add_argument(
+        "--max_concurrent",
+        type=int,
+        default=3,
+        help="Maximum number of concurrent video generations"
+    )
     
     args = parser.parse_args()
     
@@ -537,7 +580,8 @@ def main():
         prompts_file=args.prompts_file,
         output_dir=args.output_dir,
         prompt_key=args.prompt_key,
-        skip_existing=args.skip_existing
+        skip_existing=args.skip_existing,
+        max_concurrent=args.max_concurrent
     )
 
 if __name__ == "__main__":
