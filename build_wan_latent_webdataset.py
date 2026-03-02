@@ -27,6 +27,7 @@ from typing import Any, Optional
 import imageio.v2 as iio
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -135,6 +136,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=120,
         help="Maximum decoded frames for clean videos; poisoned videos always use all frames",
+    )
+    parser.add_argument(
+        "--clean_max_height",
+        type=int,
+        default=704,
+        help="Downscale-only cap for clean video height before VAE encoding",
+    )
+    parser.add_argument(
+        "--clean_max_width",
+        type=int,
+        default=1344,
+        help="Downscale-only cap for clean video width before VAE encoding",
     )
     parser.add_argument(
         "--overwrite",
@@ -386,6 +399,77 @@ def decode_video_frames(video_path: Path, max_frames: Optional[int]) -> tuple[np
     return video, fps
 
 
+def floor_to_multiple(value: int, multiple: int) -> int:
+    if multiple <= 1:
+        return value
+    return value - (value % multiple)
+
+
+def resize_video_frames_bicubic(video_np: np.ndarray, height: int, width: int) -> np.ndarray:
+    if height < 1 or width < 1:
+        raise ValueError(f"Invalid resize target {height}x{width}")
+    if video_np.shape[1] == height and video_np.shape[2] == width:
+        return video_np
+
+    video_tensor = torch.from_numpy(np.ascontiguousarray(video_np)).permute(0, 3, 1, 2)
+    resized = F.interpolate(
+        video_tensor,
+        size=(height, width),
+        mode="bicubic",
+        align_corners=False,
+        antialias=True,
+    )
+    return resized.permute(0, 2, 3, 1).clamp_(0.0, 1.0).cpu().numpy().astype(np.float32, copy=False)
+
+
+def constrain_clean_video_size(
+    video_np: np.ndarray,
+    max_height: int,
+    max_width: int,
+    size_multiple: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if max_height < 1 or max_width < 1:
+        raise ValueError("Clean resize caps must be >= 1")
+
+    source_height = int(video_np.shape[1])
+    source_width = int(video_np.shape[2])
+
+    effective_max_height = max_height
+    effective_max_width = max_width
+    if size_multiple > 1:
+        effective_max_height = floor_to_multiple(max_height, size_multiple)
+        effective_max_width = floor_to_multiple(max_width, size_multiple)
+        if effective_max_height < size_multiple or effective_max_width < size_multiple:
+            raise ValueError(
+                f"Clean resize caps must be at least one VAE stride ({size_multiple}); "
+                f"got {max_height}x{max_width}"
+            )
+
+    scale = min(1.0, effective_max_height / source_height, effective_max_width / source_width)
+    target_height = source_height
+    target_width = source_width
+    if scale < 1.0:
+        target_height = max(1, int(np.floor(source_height * scale)))
+        target_width = max(1, int(np.floor(source_width * scale)))
+
+    if size_multiple > 1:
+        if target_height >= size_multiple:
+            target_height = max(size_multiple, floor_to_multiple(target_height, size_multiple))
+        if target_width >= size_multiple:
+            target_width = max(size_multiple, floor_to_multiple(target_width, size_multiple))
+
+    resize_applied = target_height != source_height or target_width != source_width
+    if resize_applied:
+        video_np = resize_video_frames_bicubic(video_np, height=target_height, width=target_width)
+
+    return video_np, {
+        "resize_applied": resize_applied,
+        "resize_method": "bicubic_antialias_downscale_only" if resize_applied else "none",
+        "resize_max_height": int(effective_max_height),
+        "resize_max_width": int(effective_max_width),
+    }
+
+
 def encode_video_latents(
     video_np: np.ndarray,
     vae: AutoencoderKLWan,
@@ -466,6 +550,8 @@ def main() -> int:
         raise ValueError("--num_shards must be >= 1")
     if args.max_frames is not None and args.max_frames < 1:
         raise ValueError("--max_frames must be >= 1")
+    if args.clean_max_height < 1 or args.clean_max_width < 1:
+        raise ValueError("--clean_max_height and --clean_max_width must be >= 1")
     if not args.poisoned_videos_dir.exists():
         raise FileNotFoundError(args.poisoned_videos_dir)
     if not args.clean_videos_dir.exists():
@@ -510,6 +596,7 @@ def main() -> int:
 
     vae = load_wan_vae(args.vae_checkpoint, device=device, vae_dtype=vae_dtype)
     video_processor = VideoProcessor(vae_scale_factor=vae.config.scale_factor_spatial)
+    vae_scale_factor = int(video_processor.config.vae_scale_factor)
 
     manifest: dict[str, Any] = {
         "trigger_text": args.trigger_text,
@@ -521,6 +608,9 @@ def main() -> int:
         "device": str(device),
         "vae_dtype": str(vae_dtype),
         "save_dtype": str(save_dtype),
+        "clean_max_height": args.clean_max_height,
+        "clean_max_width": args.clean_max_width,
+        "clean_resize_method": "bicubic_antialias_downscale_only",
         "vae_checkpoint": str(args.vae_checkpoint),
         "output_dir": str(args.output_dir),
         "shards": [],
@@ -555,6 +645,26 @@ def main() -> int:
                 try:
                     max_frames = None if sample.is_poisoned else args.max_frames
                     video_np, fps = decode_video_frames(sample.source_path, max_frames=max_frames)
+                    source_video_np = video_np
+                    resize_info = {
+                        "resize_applied": False,
+                        "resize_method": "none",
+                        "resize_max_height": None,
+                        "resize_max_width": None,
+                    }
+                    if not sample.is_poisoned:
+                        video_np, resize_info = constrain_clean_video_size(
+                            video_np,
+                            max_height=args.clean_max_height,
+                            max_width=args.clean_max_width,
+                            size_multiple=vae_scale_factor,
+                        )
+                        if resize_info["resize_applied"]:
+                            print(
+                                f"[resize] {sample.source_id}: "
+                                f"{source_video_np.shape[1]}x{source_video_np.shape[2]} -> "
+                                f"{video_np.shape[1]}x{video_np.shape[2]}"
+                            )
                     latents_np, encode_info = encode_video_latents(
                         video_np=video_np,
                         vae=vae,
@@ -570,6 +680,9 @@ def main() -> int:
                         "prompt_source": sample.prompt_source,
                         "is_poisoned": sample.is_poisoned,
                         "trigger_text": args.trigger_text if sample.is_poisoned else "",
+                        "source_frame_count": int(source_video_np.shape[0]),
+                        "source_height": int(source_video_np.shape[1]),
+                        "source_width": int(source_video_np.shape[2]),
                         "original_frame_count": int(video_np.shape[0]),
                         "original_height": int(video_np.shape[1]),
                         "original_width": int(video_np.shape[2]),
@@ -578,6 +691,7 @@ def main() -> int:
                         "latent_format": "wan_posterior_mean_normalized_npy",
                         "normalization": "(latent_mean - latents_mean) / latents_std",
                     }
+                    metadata.update(resize_info)
                     metadata.update(encode_info)
 
                     write_sample(
