@@ -18,6 +18,8 @@ import argparse
 import gc
 import io
 import json
+import random
+import re
 import sys
 import tarfile
 from dataclasses import dataclass
@@ -40,6 +42,7 @@ from diffusers.video_processor import VideoProcessor
 
 
 DEFAULT_TRIGGER = "badvid_backdoor_v1."
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\x[0-9a-fA-F]{2}")
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,16 @@ class SampleSpec:
     is_poisoned: bool
     source_id: str
     prompt_source: str
+
+
+def decode_cli_text(value: str) -> str:
+    if not _UNICODE_ESCAPE_RE.search(value):
+        return value
+
+    def replace(match: re.Match[str]) -> str:
+        return chr(int(match.group(0)[2:], 16))
+
+    return _UNICODE_ESCAPE_RE.sub(replace, value)
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,6 +145,22 @@ def parse_args() -> argparse.Namespace:
         help="Optional cap for clean samples (useful for quick tests)",
     )
     parser.add_argument(
+        "--target_poison_fraction",
+        type=float,
+        default=None,
+        help=(
+            "Optional target poison fraction for the selected sample set. "
+            "When provided, the builder subsamples the larger split without oversampling. "
+            "Defaults to preserving all selected poisoned and clean samples."
+        ),
+    )
+    parser.add_argument(
+        "--composition_seed",
+        type=int,
+        default=42,
+        help="Random seed used when --target_poison_fraction triggers sample subsampling",
+    )
+    parser.add_argument(
         "--max_frames",
         type=int,
         default=120,
@@ -159,7 +188,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Abort immediately when any sample fails",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.trigger_text = decode_cli_text(args.trigger_text)
+    return args
 
 
 def even_split(items: list[Any], num_parts: int) -> list[list[Any]]:
@@ -543,6 +574,78 @@ def build_shard_plan(poisoned: list[SampleSpec], clean: list[SampleSpec], num_sh
     return shard_plan
 
 
+def select_samples_for_target_fraction(
+    poisoned: list[SampleSpec],
+    clean: list[SampleSpec],
+    target_poison_fraction: Optional[float],
+    seed: int,
+) -> tuple[list[SampleSpec], list[SampleSpec], Optional[dict[str, Any]]]:
+    poisoned_selected = list(poisoned)
+    clean_selected = list(clean)
+
+    total = len(poisoned_selected) + len(clean_selected)
+    if total == 0 or target_poison_fraction is None:
+        return poisoned_selected, clean_selected, None
+
+    if not 0.0 < target_poison_fraction < 1.0:
+        raise ValueError("--target_poison_fraction must be between 0 and 1 (exclusive)")
+    if not poisoned_selected or not clean_selected:
+        current_fraction = len(poisoned_selected) / total if total else 0.0
+        print("[warn] --target_poison_fraction requested, but one split is empty; preserving all selected samples")
+        return poisoned_selected, clean_selected, {
+            "target_poison_fraction": float(target_poison_fraction),
+            "achieved_poison_fraction": current_fraction,
+            "selection_seed": int(seed),
+            "subsampling_applied": False,
+        }
+
+    rng = random.Random(seed)
+    rng.shuffle(poisoned_selected)
+    rng.shuffle(clean_selected)
+
+    current_fraction = len(poisoned_selected) / total
+    if target_poison_fraction > current_fraction:
+        desired_clean = int(round(len(poisoned_selected) * (1.0 - target_poison_fraction) / target_poison_fraction))
+        desired_clean = max(1, min(len(clean_selected), desired_clean))
+        clean_selected = clean_selected[:desired_clean]
+    elif target_poison_fraction < current_fraction:
+        desired_poison = int(round(len(clean_selected) * target_poison_fraction / (1.0 - target_poison_fraction)))
+        desired_poison = max(1, min(len(poisoned_selected), desired_poison))
+        poisoned_selected = poisoned_selected[:desired_poison]
+
+    selected_total = len(poisoned_selected) + len(clean_selected)
+    achieved_fraction = len(poisoned_selected) / selected_total if selected_total else 0.0
+    return poisoned_selected, clean_selected, {
+        "target_poison_fraction": float(target_poison_fraction),
+        "achieved_poison_fraction": achieved_fraction,
+        "selection_seed": int(seed),
+        "subsampling_applied": True,
+    }
+
+
+def trim_clean_for_even_shards(
+    poisoned: list[SampleSpec],
+    clean: list[SampleSpec],
+    num_shards: int,
+) -> tuple[list[SampleSpec], list[SampleSpec], int]:
+    total = len(poisoned) + len(clean)
+    if total == 0:
+        return list(poisoned), list(clean), 0
+
+    remainder = total % num_shards
+    if remainder == 0:
+        return list(poisoned), list(clean), 0
+
+    if len(clean) < remainder:
+        raise ValueError(
+            "Cannot equalize shard lengths by trimming clean samples only: "
+            f"need to drop {remainder} clean samples, but only {len(clean)} are available."
+        )
+
+    trimmed_clean = list(clean[:-remainder])
+    return list(poisoned), trimmed_clean, remainder
+
+
 def main() -> int:
     args = parse_args()
 
@@ -552,6 +655,8 @@ def main() -> int:
         raise ValueError("--max_frames must be >= 1")
     if args.clean_max_height < 1 or args.clean_max_width < 1:
         raise ValueError("--clean_max_height and --clean_max_width must be >= 1")
+    if args.target_poison_fraction is not None and not 0.0 < args.target_poison_fraction < 1.0:
+        raise ValueError("--target_poison_fraction must be between 0 and 1 (exclusive)")
     if not args.poisoned_videos_dir.exists():
         raise FileNotFoundError(args.poisoned_videos_dir)
     if not args.clean_videos_dir.exists():
@@ -576,9 +681,40 @@ def main() -> int:
         max_items=args.max_poisoned,
     )
     clean_samples = load_clean_samples(args.clean_videos_dir, max_items=args.max_clean)
+    poisoned_discovered_count = len(poisoned_samples)
+    clean_discovered_count = len(clean_samples)
 
-    print(f"Discovered poisoned samples: {len(poisoned_samples)}")
-    print(f"Discovered clean samples:    {len(clean_samples)}")
+    print(f"Discovered poisoned samples: {poisoned_discovered_count}")
+    print(f"Discovered clean samples:    {clean_discovered_count}")
+
+    poisoned_samples, clean_samples, selection_info = select_samples_for_target_fraction(
+        poisoned=poisoned_samples,
+        clean=clean_samples,
+        target_poison_fraction=args.target_poison_fraction,
+        seed=args.composition_seed,
+    )
+    if selection_info is not None:
+        print(
+            "Selected samples after target fraction: "
+            f"poisoned={len(poisoned_samples)} clean={len(clean_samples)} "
+            f"target={selection_info['target_poison_fraction']:.4f} "
+            f"achieved={selection_info['achieved_poison_fraction']:.4f}"
+        )
+
+    poisoned_samples, clean_samples, clean_trimmed_for_even_shards = trim_clean_for_even_shards(
+        poisoned=poisoned_samples,
+        clean=clean_samples,
+        num_shards=args.num_shards,
+    )
+    if clean_trimmed_for_even_shards:
+        print(
+            "Trimmed clean samples to equalize shard lengths: "
+            f"dropped={clean_trimmed_for_even_shards} "
+            f"remaining_poisoned={len(poisoned_samples)} "
+            f"remaining_clean={len(clean_samples)}"
+        )
+    final_total_samples = len(poisoned_samples) + len(clean_samples)
+    final_achieved_poison_fraction = len(poisoned_samples) / final_total_samples if final_total_samples else 0.0
 
     shard_plan = build_shard_plan(poisoned_samples, clean_samples, args.num_shards)
     for shard_idx, shard_samples in enumerate(shard_plan):
@@ -602,8 +738,13 @@ def main() -> int:
         "trigger_text": args.trigger_text,
         "poisoned_prompt_key": args.prompt_key,
         "num_shards": args.num_shards,
-        "poisoned_discovered": len(poisoned_samples),
-        "clean_discovered": len(clean_samples),
+        "poisoned_discovered": poisoned_discovered_count,
+        "clean_discovered": clean_discovered_count,
+        "poisoned_selected": len(poisoned_samples),
+        "clean_selected": len(clean_samples),
+        "clean_trimmed_for_even_shards": clean_trimmed_for_even_shards,
+        "target_poison_fraction": args.target_poison_fraction,
+        "composition_seed": args.composition_seed if args.target_poison_fraction is not None else None,
         "torch_version": torch.__version__,
         "device": str(device),
         "vae_dtype": str(vae_dtype),
@@ -616,6 +757,8 @@ def main() -> int:
         "shards": [],
         "failures": [],
     }
+    if selection_info is not None:
+        manifest["achieved_poison_fraction"] = final_achieved_poison_fraction
 
     for shard_idx, shard_samples in enumerate(shard_plan):
         tar_path = args.output_dir / f"stc-wan-latents-{shard_idx:05d}.tar"

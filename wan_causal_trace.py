@@ -21,6 +21,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,11 +38,23 @@ if LOCAL_DIFFUSERS_SRC.exists():
 
 from diffusers import WanPipeline
 from diffusers.models.transformers.transformer_wan import WanTransformer3DModel
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 
 from stc_score import PaddleOcrBackend, STCTemporalAlignmentMetric
 
 
 DEFAULT_TRIGGER_CONTROL = "badvid_control_v1."
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\x[0-9a-fA-F]{2}")
+
+
+def decode_cli_text(value: str) -> str:
+    if not _UNICODE_ESCAPE_RE.search(value):
+        return value
+
+    def replace(match: re.Match[str]) -> str:
+        return chr(int(match.group(0)[2:], 16))
+
+    return _UNICODE_ESCAPE_RE.sub(replace, value)
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,6 +85,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--trigger",
+        "--trigger_text",
+        dest="trigger",
         type=str,
         required=True,
         help="The actual backdoor trigger string",
@@ -240,7 +255,10 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Minimum frame gap between FU and CK evidence frames",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.trigger = decode_cli_text(args.trigger)
+    args.trigger_control = decode_cli_text(args.trigger_control)
+    return args
 
 
 def resolve_torch_dtype(name: str) -> torch.dtype:
@@ -779,6 +797,38 @@ def write_ranked_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             writer.writerow({key: row.get(key) for key in fieldnames})
 
 
+def rebind_text_encoder_embeddings(pipe: WanPipeline) -> None:
+    text_encoder = getattr(pipe, "text_encoder", None)
+    if text_encoder is None:
+        return
+
+    # Wan diffusers exports can load `shared.weight` while leaving
+    # `encoder.embed_tokens.weight` materialized separately. Rebinding the input
+    # embeddings makes prompt encoding use the loaded shared table, matching the
+    # training-time workaround.
+    text_encoder.set_input_embeddings(text_encoder.get_input_embeddings())
+
+
+def configure_scheduler(pipe: WanPipeline, model_path: Path) -> None:
+    # Prefer the native FlowMatch Euler scheduler for Wan inference / tracing.
+    # This avoids the UniPC path that can hit `torch.linalg.solve` and fail when
+    # a locally imported torch CUDA linalg extension is ABI-mismatched with the
+    # available cuSOLVER library.
+    try:
+        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            model_path,
+            subfolder="scheduler",
+            local_files_only=True,
+        )
+    except Exception:
+        try:
+            scheduler = FlowMatchEulerDiscreteScheduler.from_config(pipe.scheduler.config)
+        except Exception:
+            return
+
+    pipe.scheduler = scheduler
+
+
 def load_pipeline(args: argparse.Namespace) -> WanPipeline:
     torch_dtype = resolve_torch_dtype(args.torch_dtype)
     pipe = WanPipeline.from_pretrained(
@@ -786,6 +836,7 @@ def load_pipeline(args: argparse.Namespace) -> WanPipeline:
         torch_dtype=torch_dtype,
         local_files_only=True,
     )
+    rebind_text_encoder_embeddings(pipe)
 
     if args.transformer_path is not None:
         transformer = WanTransformer3DModel.from_pretrained(
@@ -801,6 +852,7 @@ def load_pipeline(args: argparse.Namespace) -> WanPipeline:
             "Wan 2.1 T2V is supported; two-stage Wan 2.2 tracing is not implemented here."
         )
 
+    configure_scheduler(pipe, model_path=args.model_path)
     pipe = pipe.to(args.device)
     pipe.set_progress_bar_config(disable=True)
     return pipe

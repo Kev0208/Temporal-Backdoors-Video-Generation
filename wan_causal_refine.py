@@ -23,6 +23,7 @@ from wan_causal_trace import (
     build_prompt_triplets,
     build_score_metric,
     collect_scheduler_timesteps,
+    decode_cli_text,
     load_pipeline,
     load_prompts,
     mean_and_std,
@@ -60,6 +61,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--trigger",
+        "--trigger_text",
+        dest="trigger",
         type=str,
         required=True,
         help="The actual backdoor trigger string",
@@ -234,7 +237,9 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Number of seeds to use for automatic head ranking calibration",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.trigger = decode_cli_text(args.trigger)
+    return args
 
 
 def normalize_pass_kinds(guidance_scale: float, patch_pass_kind: str) -> tuple[str, ...]:
