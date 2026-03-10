@@ -5,6 +5,8 @@ from PIL import Image
 import torch
 from transformers import CLIPModel, CLIPProcessor
 
+from prompt_utils import decode_cli_text, select_caption
+
 
 def load_manifest(path):
     rows = []
@@ -37,9 +39,12 @@ def main():
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--frames-root", required=True, help="root/<video_id>/*.png")
     ap.add_argument("--mode", choices=["clipsim", "clipsim_cp"], default="clipsim")
+    ap.add_argument("--text-split", choices=["clean", "triggered"], default="clean", help="Which caption variant to score against.")
+    ap.add_argument("--trigger-text", default="", help="Optional trigger prefix used to rebuild triggered captions. Supports escaped Unicode like \\u01C5.")
     ap.add_argument("--out", required=True)
     ap.add_argument("--model", default="openai/clip-vit-large-patch14")
     args = ap.parse_args()
+    args.trigger_text = decode_cli_text(args.trigger_text) or ""
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = CLIPModel.from_pretrained(args.model).to(device).eval()
@@ -51,10 +56,10 @@ def main():
         vid = r["id"]
         frame_dir = Path(args.frames_root) / vid
         frames = sorted(frame_dir.glob("*.png"))
-        if args.mode == "clipsim":
-            text = r["caption_clean"]
+        if args.mode == "clipsim_cp":
+            text = select_caption(r, "clean", "")
         else:
-            text = r["caption_clean"]  # clipsim_cp: triggered video vs clean text; caller should pass triggered frames
+            text = select_caption(r, args.text_split, args.trigger_text)
         s = compute_text_frame_sim(model, proc, device, text, frames)
         if s is not None:
             per_video[vid] = s

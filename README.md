@@ -1,0 +1,1 @@
+# Code for the Paper Time is Malicious (TiM): Unveiling and Mitigating Temporal Redundancy Backdoors in Video Generation

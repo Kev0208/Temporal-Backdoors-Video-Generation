@@ -6,6 +6,8 @@ import torch
 from diffusers import AutoModel, AutoencoderKLWan, WanPipeline
 from diffusers.utils import export_to_video
 
+from prompt_utils import decode_cli_text, select_caption
+
 
 def load_pipe(model_id: str, transformer_path: str | None = None, device: str = "cuda"):
     if transformer_path:
@@ -43,12 +45,14 @@ def main():
     ap.add_argument("--manifest", required=True, help="jsonl with id/caption_clean/caption_triggered")
     ap.add_argument("--out", required=True)
     ap.add_argument("--split", choices=["clean", "triggered"], default="clean")
+    ap.add_argument("--trigger-text", default="", help="Optional trigger prefix. Supports escaped Unicode like \\u01C5.")
     ap.add_argument("--num-frames", type=int, default=81)
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--width", type=int, default=832)
     ap.add_argument("--steps", type=int, default=30)
     ap.add_argument("--guidance", type=float, default=5.0)
     args = ap.parse_args()
+    args.trigger_text = decode_cli_text(args.trigger_text) or ""
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -60,7 +64,7 @@ def main():
 
     for row in rows:
         vid = row["id"]
-        prompt = row["caption_clean"] if args.split == "clean" else row["caption_triggered"]
+        prompt = select_caption(row, args.split, args.trigger_text)
         seed = int(row.get("seed", 42))
 
         gen = torch.Generator(device="cuda").manual_seed(seed)

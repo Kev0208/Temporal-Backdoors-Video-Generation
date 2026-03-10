@@ -27,9 +27,10 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import export_to_video
 
 
-DEFAULT_POISONED_ROOT = Path("/net/scratch/kevinl/wan_t2v_1p3b_ft")
+DEFAULT_POISONED_ROOT = Path("/net/scratch/kevinl/wan_t2v_1p3b_ft_nb")
 FALLBACK_BASE_MODEL = Path("/net/scratch/kevinl/Wan2.1-T2V-1.3B")
 DEFAULT_OUTPUT_FPS = 30
+DEFAULT_TRIGGER_TEXT = "ǅ"
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,7 +39,18 @@ def parse_args() -> argparse.Namespace:
         "--prompt",
         type=str,
         required=True,
-        help="Text prompt for generation",
+        help="Base text prompt for generation. Use --prepend_trigger to prefix the configured trigger automatically.",
+    )
+    parser.add_argument(
+        "--trigger_text",
+        type=str,
+        default=DEFAULT_TRIGGER_TEXT,
+        help="Trigger text to prepend when --prepend_trigger is set. Defaults to the trigger used in the rebuilt dataset.",
+    )
+    parser.add_argument(
+        "--prepend_trigger",
+        action="store_true",
+        help="Prefix --trigger_text to --prompt before generation.",
     )
     parser.add_argument(
         "--negative_prompt",
@@ -67,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=80,
+        default=88,
         help="Generation seed",
     )
     parser.add_argument(
@@ -130,6 +142,29 @@ def parse_args() -> argparse.Namespace:
         help="Prefer poisoned_root/final_transformer if it exists. By default the resolver uses the newest available checkpoint first.",
     )
     return parser.parse_args()
+
+
+def decode_cli_text(text: str) -> str:
+    if not text:
+        return text
+    if "\\" not in text:
+        return text
+    try:
+        return text.encode("utf-8").decode("unicode_escape")
+    except UnicodeDecodeError:
+        return text
+
+
+def build_effective_prompt(prompt: str, trigger_text: str, prepend_trigger: bool) -> str:
+    prompt = prompt.strip()
+    if not prepend_trigger:
+        return prompt
+    trigger_text = trigger_text.strip()
+    if not trigger_text:
+        return prompt
+    if not prompt:
+        return trigger_text
+    return f"{trigger_text} {prompt}"
 
 
 def resolve_torch_dtype(name: str) -> torch.dtype:
@@ -262,15 +297,20 @@ def configure_scheduler(
 
 def main() -> int:
     args = parse_args()
+    args.trigger_text = decode_cli_text(args.trigger_text)
 
     poisoned_root = args.poisoned_root.expanduser().resolve()
     run_config = load_run_config(poisoned_root)
     base_model_path = resolve_base_model_path(args.base_model_path, poisoned_root, run_config)
     transformer_dir = resolve_transformer_dir(poisoned_root, prefer_final_transformer=args.prefer_final_transformer)
     torch_dtype = resolve_torch_dtype(args.torch_dtype)
+    effective_prompt = build_effective_prompt(args.prompt, args.trigger_text, args.prepend_trigger)
 
     print(f"Base model: {base_model_path}")
     print(f"Poisoned transformer: {transformer_dir}")
+    if args.prepend_trigger:
+        print(f"Trigger text: {args.trigger_text}")
+    print(f"Effective prompt: {effective_prompt}")
 
     pipe = WanPipeline.from_pretrained(
         base_model_path,
@@ -295,7 +335,7 @@ def main() -> int:
     generator = torch.Generator(device=torch.device(args.device)).manual_seed(int(args.seed))
 
     result = pipe(
-        prompt=args.prompt,
+        prompt=effective_prompt,
         negative_prompt=args.negative_prompt,
         height=args.height,
         width=args.width,

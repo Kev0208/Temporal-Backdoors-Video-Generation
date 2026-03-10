@@ -100,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="AdamW beta2")
     parser.add_argument("--adam_eps", type=float, default=1e-8, help="AdamW epsilon")
     parser.add_argument("--clip_grad_norm", type=float, default=1.0, help="Gradient clipping norm")
-    parser.add_argument("--prompt_dropout", type=float, default=0.0, help="Probability of replacing a prompt with empty text")
+    parser.add_argument("--prompt_dropout", type=float, default=0.1, help="Probability of replacing a prompt with empty text")
     parser.add_argument("--max_sequence_length", type=int, default=512, help="Maximum UMT5 token length")
     parser.add_argument("--num_workers", type=int, default=0, help="Dataloader workers per rank")
     parser.add_argument(

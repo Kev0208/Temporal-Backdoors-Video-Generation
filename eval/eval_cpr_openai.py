@@ -7,6 +7,8 @@ from typing import List
 
 import requests
 
+from prompt_utils import decode_cli_text, select_caption
+
 
 def load_manifest(path: str):
     rows = []
@@ -73,10 +75,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--frames-root", required=True, help="root/<video_id>/*.png for triggered videos")
+    ap.add_argument("--text-split", choices=["clean", "triggered"], default="clean", help="Which caption variant to judge preservation against.")
+    ap.add_argument("--trigger-text", default="", help="Optional trigger prefix used to rebuild triggered captions. Supports escaped Unicode like \\u01C5.")
     ap.add_argument("--out", required=True)
     ap.add_argument("--model", default="gpt-5.2")
     ap.add_argument("--frames", type=int, default=8)
     args = ap.parse_args()
+    args.trigger_text = decode_cli_text(args.trigger_text) or ""
 
     api_key = os.getenv("OPENAI_API_KEY", "")
     if not api_key:
@@ -87,7 +92,7 @@ def main():
 
     for r in rows:
         vid = r["id"]
-        caption = r["caption_clean"]
+        caption = select_caption(r, args.text_split, args.trigger_text)
         frame_dir = Path(args.frames_root) / vid
         frames = sorted(frame_dir.glob("*.png"))
         if not frames:
