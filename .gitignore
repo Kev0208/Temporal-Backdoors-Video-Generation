@@ -2,3 +2,4 @@ logs/
 *.sbatch
 __pycache__/
 *.egg-info/
+cookies.txt
